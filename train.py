@@ -214,7 +214,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
             x, y, gender = model.parse_batch(batch)
             y_pred, z_sample, kl_loss = model(x)
 
-            loss = criterion(x, y_pred, y) + 0.0002 * kl_loss
+            loss = criterion(x, y_pred, y) + 0.0001 * kl_loss
             if hparams.distributed_run:
                 reduced_loss = reduce_tensor(loss.data, n_gpus).item()
             else:

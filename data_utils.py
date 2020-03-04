@@ -70,8 +70,9 @@ class TextMelLoader(torch.utils.data.Dataset):
             assert melspec.size(0) == self.stft.n_mel_channels, (
                 'Mel dimension mismatch: given {}, expected {}'.format(
                     melspec.size(0), self.stft.n_mel_channels))
-
-        melspec = melspec / 10.0
+        
+        melspec = melspec / 10. + 0.5
+        
         return melspec
 
     def get_text(self, text):
