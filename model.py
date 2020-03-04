@@ -179,7 +179,7 @@ class Encoder(nn.Module):
         # pytorch tensor are not reversible, hence the conversion
         input_lengths = input_lengths.cpu().numpy()
         x = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths, batch_first=True)
+            x, input_lengths, batch_first=True, enforce_sorted=False)
 
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(x)
@@ -200,13 +200,91 @@ class Encoder(nn.Module):
 
         return outputs
 
+class LatentEncoder(nn.Module):
+    def __init__(self, hparams):
+        super(LatentEncoder, self).__init__()
+        
+        convolutions = []
+        for layer in range(hparams.latent_n_convolutions):
+            conv_layer = nn.Sequential(
+                ConvNorm(hparams.n_mel_channels if layer == 0 else hparams.latent_conv_filters,
+                         hparams.latent_conv_filters,
+                         kernel_size=hparams.latent_kernel_size, stride=1,
+                         padding=int((hparams.latent_kernel_size - 1) / 2),
+                         dilation=1, w_init_gain='relu'),
+                nn.BatchNorm1d(hparams.latent_conv_filters))
+            convolutions.append(conv_layer)
+        self.convolutions = nn.ModuleList(convolutions)
+
+        self.lstm = nn.LSTM(hparams.latent_conv_filters,
+                            int(hparams.latent_lstm_dim / 2), 2,
+                            batch_first=True, bidirectional=True)
+        
+        self.mean_proj = nn.Sequential(LinearNorm(hparams.latent_lstm_dim, hparams.latent_lstm_dim*2),
+                                       nn.ReLU(),
+                                       LinearNorm(hparams.latent_lstm_dim*2, hparams.latent_embedding_dim))
+        
+        self.logstd_proj = nn.Sequential(LinearNorm(hparams.latent_lstm_dim, hparams.latent_lstm_dim*2),
+                                       nn.ReLU(),
+                                       LinearNorm(hparams.latent_lstm_dim*2, hparams.latent_embedding_dim))
+        
+        
+    def _kl_loss(self, z_mean, z_logstd):
+        z_logvar = 2 * z_logstd
+        z_var = torch.exp(z_logvar)
+        kl_loss = -torch.mean(0.5 * torch.sum(1 + z_logvar - z_mean ** 2 - z_var, dim=1))
+        return kl_loss
+        
+    def forward(self, y, input_lengths):
+        '''
+        params
+        y: (batch, channel, length) melspectrogram
+        input_lengths: (batch)
+        '''
+        
+        for conv in self.convolutions:
+            y = F.dropout(F.relu(conv(y)), 0.5, self.training)
+
+        # (batch, length, channel)
+        y = y.transpose(1, 2)
+
+        # pytorch tensor are not reversible, hence the conversion
+        y = nn.utils.rnn.pack_padded_sequence(y, input_lengths.cpu().numpy(), batch_first=True, enforce_sorted=True)
+
+        self.lstm.flatten_parameters()
+        y, _ = self.lstm(y)
+
+        y, _ = nn.utils.rnn.pad_packed_sequence(y, batch_first=True)
+        mask = get_mask_from_lengths(input_lengths)
+        y = y * mask[:, :, None]
+        
+        # (batch, channel)
+        y = torch.sum(y, dim=1) / input_lengths[:, None]
+        z_mean = self.mean_proj(y)
+        z_logstd = self.logstd_proj(y)        
+        z_sample = z_mean + torch.exp(z_logstd) * torch.randn_like(z_logstd)
+        kl_loss = self._kl_loss(z_mean, z_logstd)
+        
+        return z_sample, kl_loss
+        
+    def inference(self, x):
+        for conv in self.convolutions:
+            x = F.dropout(F.relu(conv(x)), 0.5, self.training)
+
+        x = x.transpose(1, 2)
+
+        self.lstm.flatten_parameters()
+        outputs, _ = self.lstm(x)
+
+        return outputs
+
 
 class Decoder(nn.Module):
     def __init__(self, hparams):
         super(Decoder, self).__init__()
         self.n_mel_channels = hparams.n_mel_channels
         self.n_frames_per_step = hparams.n_frames_per_step
-        self.encoder_embedding_dim = hparams.encoder_embedding_dim
+        self.encoder_embedding_dim = hparams.encoder_embedding_dim + hparams.latent_embedding_dim
         self.attention_rnn_dim = hparams.attention_rnn_dim
         self.decoder_rnn_dim = hparams.decoder_rnn_dim
         self.prenet_dim = hparams.prenet_dim
@@ -220,24 +298,24 @@ class Decoder(nn.Module):
             [hparams.prenet_dim, hparams.prenet_dim])
 
         self.attention_rnn = nn.LSTMCell(
-            hparams.prenet_dim + hparams.encoder_embedding_dim,
+            hparams.prenet_dim + self.encoder_embedding_dim,
             hparams.attention_rnn_dim)
 
         self.attention_layer = Attention(
-            hparams.attention_rnn_dim, hparams.encoder_embedding_dim,
+            hparams.attention_rnn_dim, self.encoder_embedding_dim,
             hparams.attention_dim, hparams.attention_location_n_filters,
             hparams.attention_location_kernel_size)
 
         self.decoder_rnn = nn.LSTMCell(
-            hparams.attention_rnn_dim + hparams.encoder_embedding_dim,
+            hparams.attention_rnn_dim + self.encoder_embedding_dim,
             hparams.decoder_rnn_dim, 1)
 
         self.linear_projection = LinearNorm(
-            hparams.decoder_rnn_dim + hparams.encoder_embedding_dim,
+            hparams.decoder_rnn_dim + self.encoder_embedding_dim,
             hparams.n_mel_channels * hparams.n_frames_per_step)
 
         self.gate_layer = LinearNorm(
-            hparams.decoder_rnn_dim + hparams.encoder_embedding_dim, 1,
+            hparams.decoder_rnn_dim + self.encoder_embedding_dim, 1,
             bias=True, w_init_gain='sigmoid')
 
     def get_go_frame(self, memory):
@@ -467,12 +545,13 @@ class Tacotron2(nn.Module):
         val = sqrt(3.0) * std  # uniform bounds for std
         self.embedding.weight.data.uniform_(-val, val)
         self.encoder = Encoder(hparams)
+        self.latent_encoder = LatentEncoder(hparams)
         self.decoder = Decoder(hparams)
         self.postnet = Postnet(hparams)
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, \
-            output_lengths = batch
+            output_lengths, gender = batch
         text_padded = to_gpu(text_padded).long()
         input_lengths = to_gpu(input_lengths).long()
         max_len = torch.max(input_lengths.data).item()
@@ -482,7 +561,7 @@ class Tacotron2(nn.Module):
 
         return (
             (text_padded, input_lengths, mel_padded, max_len, output_lengths),
-            (mel_padded, gate_padded))
+            (mel_padded, gate_padded), gender)
 
     def parse_output(self, outputs, output_lengths=None):
         if self.mask_padding and output_lengths is not None:
@@ -503,6 +582,11 @@ class Tacotron2(nn.Module):
         embedded_inputs = self.embedding(text_inputs).transpose(1, 2)
 
         encoder_outputs = self.encoder(embedded_inputs, text_lengths)
+        z_sample, kl_loss = self.latent_encoder(mels, output_lengths)
+        
+        z_expanded = z_sample[:, None, :]
+        z_expanded = z_expanded.repeat(1, text_inputs.size(1), 1)
+        encoder_outputs = torch.cat([encoder_outputs, z_expanded], dim=2)
 
         mel_outputs, gate_outputs, alignments = self.decoder(
             encoder_outputs, mels, memory_lengths=text_lengths)
@@ -512,7 +596,7 @@ class Tacotron2(nn.Module):
 
         return self.parse_output(
             [mel_outputs, mel_outputs_postnet, gate_outputs, alignments],
-            output_lengths)
+            output_lengths), z_sample, kl_loss
 
     def inference(self, inputs):
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
