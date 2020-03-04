@@ -2,6 +2,12 @@ import numpy as np
 from scipy.io.wavfile import read
 import torch
 
+def text_to_utf8(text):
+    utf = []
+    for u in text.encode('utf-8'):
+        utf.append(u)
+        
+    return np.array(utf).astype(int)
 
 def get_mask_from_lengths(lengths):
     max_len = torch.max(lengths).item()

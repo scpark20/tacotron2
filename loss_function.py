@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from utils import make_non_pad_mask
+from utils import get_mask_from_lengths, make_non_pad_mask
 
 class GuidedAttentionLoss(nn.Module):
     """Guided attention loss function module.
@@ -137,7 +137,14 @@ class Tacotron2Loss(nn.Module):
     def __init__(self):
         super(Tacotron2Loss, self).__init__()
         self.attn_loss = GuidedAttentionLoss(sigma=0.4, alpha=1.0)
-
+        
+    def _masked_loss(self, output, target, mask, criterion='L2'):
+        if criterion == 'L2':
+            loss = torch.mean((output - target) ** 2, dim=1) * mask
+            loss = torch.mean(loss)
+            
+        return loss
+    
     def forward(self, model_input, model_output, targets):
         text_padded, input_lengths, mel_padded, max_len, output_lengths = model_input
         mel_target, gate_target = targets[0], targets[1]
@@ -147,8 +154,13 @@ class Tacotron2Loss(nn.Module):
 
         mel_out, mel_out_postnet, gate_out, alignments = model_output
         gate_out = gate_out.view(-1, 1)
-        mel_loss = nn.MSELoss()(mel_out, mel_target) + \
-            nn.MSELoss()(mel_out_postnet, mel_target)
+#         mel_loss = nn.MSELoss()(mel_out, mel_target) + \
+#             nn.MSELoss()(mel_out_postnet, mel_target)
+
+        mask = get_mask_from_lengths(output_lengths)
+        mel_loss = self._masked_loss(mel_out, mel_target, mask, criterion='L2') + \
+                   self._masked_loss(mel_out_postnet, mel_target, mask, criterion='L2')
+    
         gate_loss = nn.BCEWithLogitsLoss()(gate_out, gate_target)
         attn_loss = self.attn_loss(alignments, input_lengths, output_lengths)
         

@@ -4,14 +4,7 @@ import torch
 import torch.utils.data
 
 import layers
-from utils import load_wav_to_torch, load_filepaths_and_text
-
-def text_to_utf8(text):
-    utf = []
-    for u in text.encode('utf-8'):
-        utf.append(u)
-        
-    return np.array(utf).astype(int)
+from utils import load_wav_to_torch, load_filepaths_and_text, text_to_utf8
 
 class TextMelLoader(torch.utils.data.Dataset):
     """
