@@ -57,7 +57,8 @@ def create_hparams(hparams_string=None, verbose=False):
         latent_n_convolutions=2,
         latent_conv_filters=512,
         latent_lstm_dim=256,
-        latent_embedding_dim=16,
+        latent_embedding_dim=2,
+        latent_expand_dim=32,
 
         # Decoder parameters
         n_frames_per_step=1,  # currently only 1 is supported

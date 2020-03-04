@@ -228,6 +228,9 @@ class LatentEncoder(nn.Module):
                                        nn.ReLU(),
                                        LinearNorm(hparams.latent_lstm_dim*2, hparams.latent_embedding_dim))
         
+        self.z_expander = nn.Sequential(LinearNorm(hparams.latent_embedding_dim, hparams.latent_expand_dim * 4),
+                                        nn.ReLU(),
+                                        LinearNorm(hparams.latent_expand_dim * 4, hparams.latent_expand_dim))
         
     def _kl_loss(self, z_mean, z_logstd):
         z_logvar = 2 * z_logstd
@@ -263,9 +266,10 @@ class LatentEncoder(nn.Module):
         z_mean = self.mean_proj(y)
         z_logstd = self.logstd_proj(y)        
         z_sample = z_mean + torch.exp(z_logstd) * torch.randn_like(z_logstd)
+        z_expanded = self.z_expander(z_sample)
         kl_loss = self._kl_loss(z_mean, z_logstd)
         
-        return z_sample, kl_loss
+        return z_sample, z_expanded, kl_loss
         
     def inference(self, x):
         for conv in self.convolutions:
@@ -582,9 +586,9 @@ class Tacotron2(nn.Module):
         embedded_inputs = self.embedding(text_inputs).transpose(1, 2)
 
         encoder_outputs = self.encoder(embedded_inputs, text_lengths)
-        z_sample, kl_loss = self.latent_encoder(mels, output_lengths)
+        z_sample, z_expanded, kl_loss = self.latent_encoder(mels, output_lengths)
         
-        z_expanded = z_sample[:, None, :]
+        z_expanded = z_expanded[:, None, :]
         z_expanded = z_expanded.repeat(1, text_inputs.size(1), 1)
         encoder_outputs = torch.cat([encoder_outputs, z_expanded], dim=2)
 

@@ -71,7 +71,7 @@ class TextMelLoader(torch.utils.data.Dataset):
                 'Mel dimension mismatch: given {}, expected {}'.format(
                     melspec.size(0), self.stft.n_mel_channels))
 
-        melspec = melspec
+        melspec = melspec / 10.0
         return melspec
 
     def get_text(self, text):

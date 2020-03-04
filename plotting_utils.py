@@ -62,7 +62,7 @@ def plot_gate_outputs_to_numpy(gate_targets, gate_outputs):
     return data
 
 def plot_latent_to_numpy(z_sample, gender):
-    z_sample = PCA(n_components=2).fit_transform(z_sample)
+    #z_sample = PCA(n_components=2).fit_transform(z_sample)
     
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.scatter(z_sample[gender==0, 0], z_sample[gender==0, 1], alpha=0.5)

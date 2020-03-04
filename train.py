@@ -241,12 +241,15 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
                     iteration, reduced_loss, grad_norm, duration))
                 logger.log_training(
                     reduced_loss, grad_norm, learning_rate, duration, iteration)
+                
+            if not is_overflow and iteration % 100 == 0:
+                logger.log_validation(reduced_loss, model, y, y_pred, z_sample, gender, iteration)
 
             if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
 #                 validate(model, criterion, valset, iteration,
 #                          hparams.batch_size, n_gpus, collate_fn, logger,
 #                          hparams.distributed_run, rank)
-                logger.log_validation(reduced_loss, model, y, y_pred, z_sample, gender, iteration)
+                
                 if rank == 0:
                     checkpoint_path = os.path.join(
                         output_directory, "checkpoint_{}".format(iteration))
