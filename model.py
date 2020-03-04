@@ -271,16 +271,9 @@ class LatentEncoder(nn.Module):
         
         return z_sample, z_expanded, kl_loss
         
-    def inference(self, x):
-        for conv in self.convolutions:
-            x = F.dropout(F.relu(conv(x)), 0.5, self.training)
-
-        x = x.transpose(1, 2)
-
-        self.lstm.flatten_parameters()
-        outputs, _ = self.lstm(x)
-
-        return outputs
+    def expand(self, z_sample):
+        z_expanded = self.z_expander(z_sample)
+        return z_expanded
 
 
 class Decoder(nn.Module):
@@ -552,6 +545,8 @@ class Tacotron2(nn.Module):
         self.latent_encoder = LatentEncoder(hparams)
         self.decoder = Decoder(hparams)
         self.postnet = Postnet(hparams)
+        
+        self.hparams = hparams
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, \
@@ -605,6 +600,13 @@ class Tacotron2(nn.Module):
     def inference(self, inputs):
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
         encoder_outputs = self.encoder.inference(embedded_inputs)
+        
+        z_sample = torch.randn(inputs.size(0), self.hparams.latent_embedding_dim).cuda()
+        z_expanded = self.latent_encoder.expand(z_sample)
+        z_expanded = z_expanded[:, None, :]
+        z_expanded = z_expanded.repeat(1, inputs.size(1), 1)
+        encoder_outputs = torch.cat([encoder_outputs, z_expanded], dim=2)
+        
         mel_outputs, gate_outputs, alignments = self.decoder.inference(
             encoder_outputs)
 
